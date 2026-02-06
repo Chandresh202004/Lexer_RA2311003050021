@@ -115,6 +115,9 @@ class Lexer:
         self.advance()  # Skip opening quote
 
         while self.current_char() and self.current_char() != quote_type:
+            # Stop at newline for single-line strings
+            if self.current_char() == '\n':
+                break
             if self.current_char() == '\\':
                 string_value += self.current_char()
                 self.advance()
@@ -128,6 +131,9 @@ class Lexer:
         if self.current_char() == quote_type:
             string_value += self.current_char()
             self.advance()
+        else:
+            # String was not properly closed
+            string_value += " [UNTERMINATED]"
 
         self.add_token("STRING", string_value, start_line, start_col)
 
@@ -159,6 +165,9 @@ class Lexer:
                 break
             comment += self.current_char()
             self.advance()
+        else:
+            # Comment was not properly closed
+            comment += " [UNTERMINATED]"
 
         self.add_token("COMMENT", comment, start_line, start_col)
 
@@ -294,7 +303,7 @@ def main():
     print()
 
     # Check if file is provided as command-line argument
-    if len(sys.argv) >= 2:
+    if len(sys.argv) > 1:
         filename = sys.argv[1]
         try:
             with open(filename, 'r') as file:
