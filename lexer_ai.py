@@ -7,7 +7,7 @@ import urllib.error
 # ============================================================
 #  CONFIGURATION - PASTE YOUR GEMINI API KEY HERE
 # ============================================================
-API_KEY = "AIzaSyADkflOgv5KDiUwlFfpOZAvHtIgRGc_ysU"
+API_KEY = " "
 GEMINI_URL = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent"
 
 # ============================================================
@@ -477,3 +477,4 @@ int main() {
 
 if __name__ == "__main__":
     main()
+
