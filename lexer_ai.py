@@ -1,5 +1,6 @@
 import sys
 import json
+import time
 import urllib.request
 import urllib.error
 
@@ -194,7 +195,7 @@ class Lexer:
 
 
 # ============================================================
-#  AI ENGINE - USES ONLY BUILT-IN PYTHON (NO PIP INSTALL)
+#  AI ENGINE - WITH RETRY LOGIC (NO PIP INSTALL NEEDED)
 # ============================================================
 class AIAssistant:
     def __init__(self, api_key):
@@ -207,17 +208,12 @@ class AIAssistant:
             print("  [!] Then paste it in the API_KEY variable at top of this file.\n")
             return
 
-        # Test connection
-        try:
-            self._call_gemini("Say OK")
-            self.enabled = True
-            print("  [+] AI Assistant (Gemini) connected!\n")
-        except Exception as e:
-            print(f"  [!] AI connection failed: {e}")
-            print("  [!] Running in OFFLINE mode (lexer still works).\n")
+        # Skip test call to save API quota - just mark as ready
+        self.enabled = True
+        print("  [+] AI Assistant ready (key loaded).\n")
 
     def _call_gemini(self, prompt):
-        """Call Gemini API using ONLY built-in urllib (no pip install needed)"""
+        """Call Gemini API with AUTOMATIC RETRY on rate limit (429)"""
         url = f"{GEMINI_URL}?key={self.api_key}"
 
         payload = json.dumps({
@@ -226,16 +222,43 @@ class AIAssistant:
             }]
         }).encode("utf-8")
 
-        req = urllib.request.Request(
-            url,
-            data=payload,
-            headers={"Content-Type": "application/json"},
-            method="POST"
-        )
+        max_retries = 3
+        wait_times = [10, 30, 60]  # wait 10s, then 30s, then 60s
 
-        with urllib.request.urlopen(req, timeout=30) as response:
-            data = json.loads(response.read().decode("utf-8"))
-            return data["candidates"][0]["content"]["parts"][0]["text"]
+        for attempt in range(max_retries):
+            try:
+                req = urllib.request.Request(
+                    url,
+                    data=payload,
+                    headers={"Content-Type": "application/json"},
+                    method="POST"
+                )
+                with urllib.request.urlopen(req, timeout=60) as response:
+                    data = json.loads(response.read().decode("utf-8"))
+                    return data["candidates"][0]["content"]["parts"][0]["text"]
+
+            except urllib.error.HTTPError as e:
+                if e.code == 429:
+                    wait = wait_times[attempt]
+                    remaining = max_retries - attempt - 1
+                    print(f"  [!] Rate limited by Google. Auto-retrying in {wait} seconds...")
+                    print(f"      (Attempt {attempt + 1}/{max_retries}, {remaining} retries left)")
+                    print(f"      Waiting", end="", flush=True)
+                    for i in range(wait):
+                        time.sleep(1)
+                        print(".", end="", flush=True)
+                    print(" Done!")
+                elif e.code == 400:
+                    raise Exception("Bad request. Check your API key.")
+                elif e.code == 403:
+                    raise Exception("API key invalid or expired. Get a new one from https://aistudio.google.com/app/apikey")
+                else:
+                    raise Exception(f"HTTP Error {e.code}: {e.reason}")
+
+            except urllib.error.URLError as e:
+                raise Exception(f"No internet connection: {e.reason}")
+
+        raise Exception("Rate limit still active after 3 retries. Wait 2 minutes and try again.")
 
     def analyze(self, source_code, tokens, errors):
         if not self.enabled:
@@ -279,7 +302,7 @@ Be concise and helpful for a student learning compiler design."""
         if not self.enabled:
             print("  [!] AI not available. Add your API key to enable.")
             return None
-        prompt = f"""You are a compiler design expert. 
+        prompt = f"""You are a compiler design expert.
 Code being analyzed:
 {source_code if source_code else '(no code provided)'}
 
