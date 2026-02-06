@@ -1,13 +1,16 @@
 import sys
-import google.generativeai as genai
+import json
+import urllib.request
+import urllib.error
 
 # ============================================================
 #  CONFIGURATION - PASTE YOUR GEMINI API KEY HERE
 # ============================================================
 API_KEY = "AIzaSyADkflOgv5KDiUwlFfpOZAvHtIgRGc_ysU"
+GEMINI_URL = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent"
 
 # ============================================================
-#  TOKEN TYPES & TOKEN CLASS
+#  TOKEN TYPES
 # ============================================================
 KEYWORDS = [
     "auto","break","case","char","const","continue","default","do",
@@ -19,6 +22,9 @@ KEYWORDS = [
     "and","or","not","in","is","elif"
 ]
 
+# ============================================================
+#  TOKEN CLASS
+# ============================================================
 class Token:
     def __init__(self, token_type, value, line, column):
         self.type = token_type
@@ -62,7 +68,6 @@ class Lexer:
     def add_error(self, msg, line, col):
         self.errors.append(f"[Ln {line}, Col {col}] {msg}")
 
-    # ---------- NUMBER ----------
     def lex_number(self):
         sl, sc = self.line, self.column
         num_str = ""
@@ -70,14 +75,13 @@ class Lexer:
         while self.current_char() and (self.current_char().isdigit() or self.current_char() == '.'):
             if self.current_char() == '.':
                 if is_float:
-                    self.add_error(f"Invalid number: multiple decimal points", self.line, self.column)
+                    self.add_error("Invalid number: multiple decimal points", self.line, self.column)
                     break
                 is_float = True
             num_str += self.current_char()
             self.advance()
         self.add_token("FLOAT" if is_float else "INTEGER", num_str, sl, sc)
 
-    # ---------- IDENTIFIER / KEYWORD ----------
     def lex_identifier(self):
         sl, sc = self.line, self.column
         word = ""
@@ -86,7 +90,6 @@ class Lexer:
             self.advance()
         self.add_token("KEYWORD" if word in KEYWORDS else "IDENTIFIER", word, sl, sc)
 
-    # ---------- STRING ----------
     def lex_string(self, q):
         sl, sc = self.line, self.column
         s = q
@@ -105,7 +108,6 @@ class Lexer:
             self.add_error(f"Unterminated string starting with {q}", sl, sc)
         self.add_token("STRING", s, sl, sc)
 
-    # ---------- SINGLE-LINE COMMENT ----------
     def lex_comment(self):
         sl, sc = self.line, self.column
         c = ""
@@ -114,7 +116,6 @@ class Lexer:
             self.advance()
         self.add_token("COMMENT", c, sl, sc)
 
-    # ---------- MULTI-LINE COMMENT ----------
     def lex_multi_comment(self):
         sl, sc = self.line, self.column
         c = "/*"
@@ -132,7 +133,6 @@ class Lexer:
             self.add_error("Unterminated multi-line comment", sl, sc)
         self.add_token("COMMENT", c, sl, sc)
 
-    # ---------- PREPROCESSOR ----------
     def lex_preprocessor(self):
         sl, sc = self.line, self.column
         d = ""
@@ -141,7 +141,6 @@ class Lexer:
             self.advance()
         self.add_token("PREPROCESSOR", d, sl, sc)
 
-    # ==================== MAIN TOKENIZE ====================
     def tokenize(self):
         multi_ops = [
             "==","!=","<=",">=","&&","||","++","--",
@@ -153,8 +152,7 @@ class Lexer:
         while self.pos < len(self.source):
             self.skip_whitespace()
             ch = self.current_char()
-            if ch is None:
-                break
+            if ch is None: break
             if ch == '\n':
                 self.advance()
                 continue
@@ -192,30 +190,57 @@ class Lexer:
             self.add_error(f"Unknown character: '{ch}'", self.line, self.column)
             self.add_token("UNKNOWN", ch, self.line, self.column)
             self.advance()
-
         return self.tokens
 
 
 # ============================================================
-#  AI SUGGESTION ENGINE (Google Gemini)
+#  AI ENGINE - USES ONLY BUILT-IN PYTHON (NO PIP INSTALL)
 # ============================================================
 class AIAssistant:
     def __init__(self, api_key):
+        self.api_key = api_key
         self.enabled = False
+
+        if api_key == "PASTE_YOUR_GEMINI_API_KEY_HERE" or not api_key:
+            print("  [!] No API key provided. Running in OFFLINE mode.")
+            print("  [!] To enable AI: Get free key from https://aistudio.google.com/app/apikey")
+            print("  [!] Then paste it in the API_KEY variable at top of this file.\n")
+            return
+
+        # Test connection
         try:
-            genai.configure(api_key=api_key)
-            self.model = genai.GenerativeModel('gemini-2.0-flash')
+            self._call_gemini("Say OK")
             self.enabled = True
-            print("  [✓] AI Assistant (Gemini) connected!\n")
+            print("  [+] AI Assistant (Gemini) connected!\n")
         except Exception as e:
-            print(f"  [!] AI Assistant unavailable: {e}")
-            print("  [!] Running in offline mode (no suggestions)\n")
+            print(f"  [!] AI connection failed: {e}")
+            print("  [!] Running in OFFLINE mode (lexer still works).\n")
+
+    def _call_gemini(self, prompt):
+        """Call Gemini API using ONLY built-in urllib (no pip install needed)"""
+        url = f"{GEMINI_URL}?key={self.api_key}"
+
+        payload = json.dumps({
+            "contents": [{
+                "parts": [{"text": prompt}]
+            }]
+        }).encode("utf-8")
+
+        req = urllib.request.Request(
+            url,
+            data=payload,
+            headers={"Content-Type": "application/json"},
+            method="POST"
+        )
+
+        with urllib.request.urlopen(req, timeout=30) as response:
+            data = json.loads(response.read().decode("utf-8"))
+            return data["candidates"][0]["content"]["parts"][0]["text"]
 
     def analyze(self, source_code, tokens, errors):
         if not self.enabled:
             return None
 
-        # Build a detailed prompt
         token_summary = {}
         for t in tokens:
             token_summary[t.type] = token_summary.get(t.type, 0) + 1
@@ -236,41 +261,34 @@ Total tokens: {len(tokens)}
 === LEXER ERRORS DETECTED ===
 {error_str}
 
-Based on the lexical analysis above, provide:
+Provide a SHORT analysis (max 15 lines):
+1. **Code Quality** (1-2 lines)
+2. **Errors Found** (list each with fix)
+3. **Top 3 Suggestions** (bullet points)
+4. **Security Concerns** (if any, 1-2 lines)
 
-1. **Code Quality Report** (2-3 lines): Is the code well-structured?
-2. **Errors & Warnings** (if any): Explain any issues found (missing semicolons, unmatched brackets, unterminated strings, etc.)
-3. **Suggestions** (3-5 bullet points): How can the code be improved? (variable naming, best practices, potential bugs)
-4. **Optimization Tips** (2-3 bullet points): Performance or readability improvements.
-5. **Security Concerns** (if any): Buffer overflows, unsafe functions, etc.
-
-Keep the response concise, clear, and helpful for a student learning compiler design.
-"""
+Be concise and helpful for a student learning compiler design."""
 
         try:
             print("  [*] AI is analyzing your code...\n")
-            response = self.model.generate_content(prompt)
-            return response.text
+            return self._call_gemini(prompt)
         except Exception as e:
             return f"  [!] AI Error: {e}"
 
     def ask_question(self, source_code, question):
         if not self.enabled:
-            print("  [!] AI is not available in offline mode.")
+            print("  [!] AI not available. Add your API key to enable.")
             return None
+        prompt = f"""You are a compiler design expert. 
+Code being analyzed:
+{source_code if source_code else '(no code provided)'}
 
-        prompt = f"""You are an expert compiler/code assistant.
-Here is the source code being analyzed:
+Student's question: {question}
 
-{source_code}
+Give a clear, concise answer (max 10 lines). Be educational."""
 
-The student asks: {question}
-
-Provide a clear, helpful, and educational answer. Keep it concise.
-"""
         try:
-            response = self.model.generate_content(prompt)
-            return response.text
+            return self._call_gemini(prompt)
         except Exception as e:
             return f"  [!] AI Error: {e}"
 
@@ -285,12 +303,10 @@ def display_tokens(tokens, name="input"):
     print("=" * 70)
     print(f"  {'TOKEN TYPE':<16} {'VALUE':<32} {'LOCATION'}")
     print("-" * 70)
-
     counts = {}
     for t in tokens:
         print(f"  {t.type:<16} {t.value:<32} Ln {t.line} Col {t.column}")
         counts[t.type] = counts.get(t.type, 0) + 1
-
     print("=" * 70)
     print(f"  TOTAL TOKENS: {sum(counts.values())}")
     print("-" * 70)
@@ -305,52 +321,50 @@ def display_errors(errors):
         print("   LEXER ERRORS / WARNINGS")
         print("!" * 70)
         for e in errors:
-            print(f"  ⚠  {e}")
+            print(f"  WARNING >> {e}")
         print("!" * 70)
 
 
-def display_ai_response(response):
+def display_ai(response):
     if response:
-        print("\n" + "=" * 70)
-        print("   🤖 AI ASSISTANT SUGGESTIONS")
-        print("=" * 70)
+        print("\n" + "*" * 70)
+        print("   AI ASSISTANT SUGGESTIONS")
+        print("*" * 70)
         print(response)
-        print("=" * 70)
+        print("*" * 70)
 
 
 # ============================================================
 #  MAIN PROGRAM
 # ============================================================
 def main():
-    print("\n" + "=" * 58)
-    print("  ╔══════════════════════════════════════════════════════╗")
-    print("  ║   LEXICAL ANALYZER WITH AI SUGGESTIONS              ║")
-    print("  ║   by Chandresh (RA2311003050021)                    ║")
-    print("  ║   Powered by Google Gemini AI                       ║")
-    print("  ╚══════════════════════════════════════════════════════╝")
-    print("=" * 58)
+    print()
+    print("  +=======================================================+")
+    print("  |   LEXICAL ANALYZER WITH AI SUGGESTIONS                 |")
+    print("  |   by Chandresh (RA2311003050021)                       |")
+    print("  |   AI: Google Gemini | No pip install needed!           |")
+    print("  +=======================================================+")
+    print()
 
-    # Initialize AI
-    print("\n  [*] Connecting to AI Assistant...")
+    print("  [*] Initializing AI Assistant...")
     ai = AIAssistant(API_KEY)
+    source = None
 
     while True:
-        print("\n  ┌─────────────────────────────────┐")
-        print("  │         MAIN MENU                │")
-        print("  ├─────────────────────────────────┤")
-        print("  │  [1] Enter code manually         │")
-        print("  │  [2] Analyze a file              │")
-        print("  │  [3] Run demo with sample code   │")
-        print("  │  [4] Ask AI a question           │")
-        print("  │  [0] Exit                        │")
-        print("  └─────────────────────────────────┘")
+        print("\n  +----------------------------------+")
+        print("  |          MAIN MENU               |")
+        print("  +----------------------------------+")
+        print("  |  [1] Enter code manually          |")
+        print("  |  [2] Analyze a file               |")
+        print("  |  [3] Run demo (sample C code)     |")
+        print("  |  [4] Ask AI a question            |")
+        print("  |  [0] Exit                         |")
+        print("  +----------------------------------+")
 
-        choice = input("\n  Enter choice (0-4): ").strip()
-        source = None
-        source_name = "input"
+        choice = input("\n  Choice (0-4): ").strip()
 
         if choice == '1':
-            print("\n  Enter your code (type END on a new line to finish):\n")
+            print("\n  Type your code below (type END on a new line to finish):\n")
             lines = []
             while True:
                 line = input()
@@ -373,7 +387,7 @@ def main():
         elif choice == '3':
             source = """#include <stdio.h>
 
-// Calculate factorial
+// Calculate factorial recursively
 int factorial(int n) {
     if (n <= 1) return 1;
     return n * factorial(n - 1);
@@ -381,18 +395,17 @@ int factorial(int n) {
 
 int main() {
     int num = 5;
-    float result = 3.14;
+    float pi = 3.14;
     char *name = "Chandresh";
-    char *unterminated = "oops;
 
-    if (num >= 0 && result != 0) {
+    if (num >= 0 && pi != 0) {
         printf("Factorial of %d = %d\\n", num, factorial(num));
-        printf("Name: %s\\n", name);
+        printf("Hello %s\\n", name);
         num++;
     }
 
-    /* TODO: Add error handling
-       for negative numbers */
+    /* Multi-line comment
+       TODO: handle negative input */
     return 0;
 }"""
             source_name = "demo_sample.c"
@@ -402,45 +415,41 @@ int main() {
             print("  --- END SOURCE ---")
 
         elif choice == '4':
-            question = input("\n  Ask AI anything about compilers/code: ").strip()
-            if question:
-                response = ai.ask_question("", question)
-                display_ai_response(response)
+            q = input("\n  Ask anything about compilers/code: ").strip()
+            if q:
+                r = ai.ask_question(source if source else "", q)
+                display_ai(r)
             continue
 
         elif choice == '0':
-            print("\n  Goodbye! 👋\n")
+            print("\n  Goodbye!\n")
             break
-
         else:
-            print("\n  [ERROR] Invalid choice!")
+            print("  [ERROR] Invalid choice!")
             continue
 
-        if source is not None:
-            # --- STEP 1: Tokenize ---
-            lexer = Lexer(source)
-            tokens = lexer.tokenize()
+        # --- TOKENIZE ---
+        lexer = Lexer(source)
+        tokens = lexer.tokenize()
 
-            # --- STEP 2: Display Tokens ---
-            display_tokens(tokens, source_name)
+        # --- DISPLAY ---
+        display_tokens(tokens, source_name)
+        display_errors(lexer.errors)
 
-            # --- STEP 3: Display Errors ---
-            display_errors(lexer.errors)
+        # --- AI SUGGESTIONS ---
+        if ai.enabled:
+            ask = input("\n  Get AI suggestions? (y/n): ").strip().lower()
+            if ask == 'y':
+                r = ai.analyze(source, tokens, lexer.errors)
+                display_ai(r)
 
-            # --- STEP 4: AI Analysis ---
-            if ai.enabled:
-                get_ai = input("\n  🤖 Get AI suggestions? (y/n): ").strip().lower()
-                if get_ai == 'y':
-                    response = ai.analyze(source, tokens, lexer.errors)
-                    display_ai_response(response)
-
-            # --- STEP 5: Follow-up Questions ---
-            while True:
-                follow = input("\n  💬 Ask a follow-up question (or press Enter to skip): ").strip()
-                if not follow:
-                    break
-                response = ai.ask_question(source, follow)
-                display_ai_response(response)
+        # --- FOLLOW-UP ---
+        while True:
+            follow = input("\n  Ask a follow-up (or press Enter to skip): ").strip()
+            if not follow:
+                break
+            r = ai.ask_question(source, follow)
+            display_ai(r)
 
 
 if __name__ == "__main__":
