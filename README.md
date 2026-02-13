@@ -1,6 +1,6 @@
 Due to the usage of ollama key 
 
-Run these in cmd prompt 
+Run these in powerchell prompt 
 
 # 1. Download & install Ollama from https://ollama.com/download
 
