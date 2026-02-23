@@ -1,0 +1,122 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Lexical Analyzer Simulation</title>
+  <style>
+    body { font-family: Arial, sans-serif; margin: 24px; }
+    textarea { width: 100%; height: 200px; }
+    pre { background: #f6f8fa; padding: 12px; overflow-x: auto; }
+    .btn { padding: 8px 14px; margin-right: 8px; }
+    .flex { display: flex; gap: 12px; flex-wrap: wrap; }
+    .panel { flex: 1 1 320px; min-width: 280px; }
+    mark { background: #ffec99; }
+  </style>
+</head>
+<body>
+  <h1>Lexical Analyzer Simulation (no AI)</h1>
+
+  <div class="panel">
+    <h3>Source</h3>
+    <textarea id="source">int main() {
+  int x = 5;
+  float y = x + 3.2;
+  return y;
+}</textarea>
+    <div>
+      <button class="btn" id="btn-step">Step</button>
+      <button class="btn" id="btn-run">Run All</button>
+      <button class="btn" id="btn-reset">Reset</button>
+    </div>
+  </div>
+
+  <div class="panel">
+    <h3>Current Match</h3>
+    <pre id="highlight"></pre>
+    <h3>Tokens (emitted)</h3>
+    <pre id="tokens"></pre>
+    <h3>Errors</h3>
+    <pre id="errors"></pre>
+  </div>
+
+<script>
+const API_BASE = ""; // same origin; set to your deployed base if separate
+let fullText = "";
+let cursor = 0;
+let emitted = [];
+
+async function tokenizeAll(text) {
+  const res = await fetch(API_BASE + "/api/tokenize", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ source: text })
+  });
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
+function renderTokens(tokens) {
+  emitted = tokens;
+  document.getElementById("tokens").textContent =
+    tokens.map(t => `${t.type}  "${t.value}"  (Ln ${t.line}, Col ${t.column})`).join("\n") || "(none)";
+}
+
+function renderErrors(errors) {
+  document.getElementById("errors").textContent = errors.join("\n") || "(none)";
+}
+
+function renderHighlight() {
+  const before = fullText.slice(0, cursor);
+  const after = fullText.slice(cursor);
+  document.getElementById("highlight").innerHTML =
+    `<span style="color:#999;">${escapeHtml(before)}</span><mark>${escapeHtml(after.slice(0,1))}</mark>${escapeHtml(after.slice(1))}`;
+}
+
+function escapeHtml(s) {
+  return s.replace(/[&<>]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]||c));
+}
+
+// Step simulation: we precompute tokens, then reveal one per step.
+let precomputed = [];
+let idx = 0;
+
+async function reset() {
+  fullText = document.getElementById("source").value;
+  cursor = 0;
+  idx = 0;
+  const data = await tokenizeAll(fullText);
+  precomputed = data.tokens;
+  renderTokens([]);
+  renderErrors(data.errors || []);
+  renderHighlight();
+}
+
+function step() {
+  if (idx >= precomputed.length) return;
+  const t = precomputed[idx];
+  emitted.push(t);
+  renderTokens(emitted);
+  // advance cursor to end of token value; naive by searching forward
+  const pos = fullText.indexOf(t.value, cursor);
+  if (pos >= 0) cursor = pos + t.value.length;
+  idx++;
+  renderHighlight();
+}
+
+function runAll() {
+  emitted = [...precomputed];
+  renderTokens(emitted);
+  cursor = fullText.length;
+  renderHighlight();
+}
+
+// Wire up buttons
+document.getElementById("btn-reset").onclick = reset;
+document.getElementById("btn-step").onclick = step;
+document.getElementById("btn-run").onclick = runAll;
+
+// Initial load
+reset().catch(e => alert("Init error: " + e.message));
+</script>
+</body>
+</html>
